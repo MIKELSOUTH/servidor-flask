@@ -1,88 +1,62 @@
-from flask import Flask, request, jsonify
-import sqlite3
+from flask import Flask, jsonify, request
 import qrcode
+import os
 import time
-import uuid
-import paho.mqtt.client as mqtt
-import smtplib
-from email.message import EmailMessage
 
 app = Flask(__name__)
 
-# Configuración de MQTT
-MQTT_BROKER = "test.mosquitto.org"
-MQTT_TOPIC = "vending/qrs"
+@app.route('/')
+def index():
+    return "Servidor Flask en funcionamiento"
 
-mqtt_client = mqtt.Client()
-mqtt_client.connect(MQTT_BROKER, 1883, 60)
-
-# Función para crear la base de datos SQLite
-def crear_db():
-    conn = sqlite3.connect("codigos.db")
-    c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS codigos (
-            pedido_id TEXT PRIMARY KEY, 
-            expiracion INTEGER, 
-            qr_url TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
-
-crear_db()
-
-# Ruta para generar un QR
-@app.route("/generar_qr", methods=["POST"])
+@app.route('/generar_qr', methods=['POST'])
 def generar_qr():
-    # Generar un ID único para el pedido
-    pedido_id = f"PEDIDO-{uuid.uuid4().hex[:8]}"
-    expiracion = int(time.time()) + 600  # Expira en 10 minutos
+    try:
+        # Obtener los datos del cuerpo de la solicitud
+        data = request.get_json()
 
-    # Crear el enlace que estará dentro del QR
-    datos_qr = f"https://tuservidor.com/validar?pedido={pedido_id}&exp={expiracion}"
+        # Verificar que los datos necesarios estén presentes
+        if 'pedido_id' not in data or 'expiracion' not in data:
+            return jsonify({'error': 'Faltan parámetros en la solicitud'}), 400
 
-    # Generar la imagen QR
-    qr = qrcode.make(datos_qr)
-    nombre_archivo = f"static/{pedido_id}.png"
-    qr.save(nombre_archivo)
+        pedido_id = data['pedido_id']
+        expiracion = data['expiracion']
 
-    # Guardar en la base de datos (máximo 100 registros)
-    conn = sqlite3.connect("codigos.db")
-    c = conn.cursor()
-    c.execute("INSERT INTO codigos VALUES (?, ?, ?)", (pedido_id, expiracion, nombre_archivo))
-    conn.commit()
-    conn.close()
+        # Crear el contenido del QR
+        qr_content = f"{pedido_id},{expiracion}"
 
-    # Publicar en MQTT
-    mqtt_client.publish(MQTT_TOPIC, f"{pedido_id},{expiracion},{nombre_archivo}")
+        # Generar el código QR
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=10,
+            border=4,
+        )
+        qr.add_data(qr_content)
+        qr.make(fit=True)
 
-    return jsonify({"pedido_id": pedido_id, "expiracion": expiracion, "qr_url": nombre_archivo})
+        # Crear la imagen del QR
+        img = qr.make_image(fill='black', back_color='white')
 
-# Ruta para enviar QR por correo
-@app.route("/enviar_email", methods=["POST"])
-def enviar_email():
-    datos = request.json
-    destinatario = datos["email"]
-    qr_url = datos["qr_url"]
+        # Crear un nombre único para el archivo QR
+        qr_filename = f"{pedido_id}.png"
 
-    remitente = "tuemail@gmail.com"
-    mensaje = EmailMessage()
-    mensaje["Subject"] = "Tu código QR"
-    mensaje["From"] = remitente
-    mensaje["To"] = destinatario
-    mensaje.set_content(f"Escanea este QR: {qr_url}")
+        # Guardar el archivo en la carpeta 'static'
+        img_path = os.path.join('static', qr_filename)
+        img.save(img_path)
 
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as servidor:
-        servidor.login(remitente, "tucontraseña")
-        servidor.send_message(mensaje)
+        # Calcular la fecha de expiración en formato UNIX (timestamp)
+        expiration_time = time.time() + expiracion
 
-    return jsonify({"status": "QR enviado por email"})
+        # Devolver la respuesta con el enlace al QR y la expiración
+        return jsonify({
+            'pedido_id': pedido_id,
+            'expiracion': expiration_time,
+            'qr_url': img_path
+        })
 
-# Ruta raíz para verificar el estado del servidor
-@app.route("/", methods=["GET"])
-def home():
-    return "Servidor Flask en funcionamiento!"
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=10000)
