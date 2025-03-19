@@ -6,7 +6,6 @@ import uuid
 import paho.mqtt.client as mqtt
 import smtplib
 from email.message import EmailMessage
-import os
 
 app = Flask(__name__)
 
@@ -80,7 +79,10 @@ def enviar_email():
 
     return jsonify({"status": "QR enviado por email"})
 
-# Servir el archivo de la base de datos en producción
+# Ruta raíz para verificar el estado del servidor
+@app.route("/", methods=["GET"])
+def home():
+    return "Servidor Flask en funcionamiento!"
+
 if __name__ == "__main__":
-    # Asegurarse de que Flask se ejecute en el puerto adecuado para producción
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    app.run(host="0.0.0.0", port=5000)
